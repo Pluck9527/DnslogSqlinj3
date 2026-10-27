@@ -24,8 +24,8 @@ dependencies = []
 dnslogsqlinj3 = "dnslogsqlinj3:main"
 
 [project.urls]
-Homepage = "https://github.com/Pluck9527/dnslogsqlinj3"
-Source = "https://github.com/Pluck9527/dnslogsqlinj3"
+Homepage = "https://github.com/Pluck9527/DnslogSqlinj3"
+Source = "https://github.com/Pluck9527/DnslogSqlinj3"
 
 [tool.setuptools]
 py-modules = ["dnslogsqlinj3"]
