@@ -29,6 +29,3 @@ Source = "https://github.com/YOUR_GITHUB/dnslogsqlinj3"
 
 [tool.setuptools]
 py-modules = ["dnslogsqlinj3"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
