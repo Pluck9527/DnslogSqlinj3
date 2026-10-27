@@ -7,7 +7,7 @@
 ## 安装
 
 ```bash
-git clone https://github.com/YOUR_GITHUB/dnslogsqlinj3 && cd dnslogsqlinj3
+git clone https://github.com/Pluck9527/dnslogsqlinj3 && cd dnslogsqlinj3
 python3 dnslogsqlinj3.py --help        # 直接跑
 pip install . && dnslogsqlinj3 --help  # 或装成命令
 ```
