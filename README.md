@@ -1,13 +1,13 @@
-# DnslogSqlinj 3
+# DnslogSqlinj3
 
-现代 DNS 带外 SQL 注入工具。Python 3.8+，单文件，零依赖。
+现代 DNS 带外 SQL 注入工具（原版 DnslogSqlinj 的第三代重写）。Python 3.8+，单文件，零依赖。
 
 原版 [DnslogSqlinj](https://github.com/ADOOO/DnslogSqlinj)（2019，py2，ceye 硬编码，仅 MySQL）的非官方重写：一次解析搬 30 字节，四种数据库、四种平台、三种技术。
 
 ## 安装
 
 ```bash
-git clone https://github.com/Pluck9527/DnslogSqlinj3 && cd dnslogsqlinj3
+git clone https://github.com/Pluck9527/DnslogSqlinj3 && cd DnslogSqlinj3
 python3 dnslogsqlinj3.py --help        # 直接跑
 pip install . && dnslogsqlinj3 --help  # 或装成命令
 ```
