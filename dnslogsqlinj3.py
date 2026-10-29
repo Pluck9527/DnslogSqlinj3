@@ -57,6 +57,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+class ProviderAuthError(RuntimeError):
+    """凭证无效 —— 重试没有意义, 应当立刻停止。"""
+
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 
@@ -203,6 +207,9 @@ class Ceye(Provider):
                 88: "参数不合法, 检查 token 长度/--filter",
                 404: "接口路径不对, --base 应形如 http://api.ceye.io/v1",
             }.get(code, "检查 --token / --ident / --base")
+            if code in (21, 88):
+                raise ProviderAuthError(
+                    "ceye 拒绝请求: code=%s %s —— %s" % (code, meta.get("message"), hint))
             raise RuntimeError("ceye 拒绝请求: code=%s %s —— %s"
                                % (code, meta.get("message"), hint))
         return [str(x.get("name", "")) for x in (j.get("data") or []) if isinstance(x, dict)]
@@ -428,6 +435,10 @@ class DnsExfil:
         while time.time() < deadline:
             try:
                 names = self._names()
+            except ProviderAuthError as e:
+                print("[x] %s" % e, file=sys.stderr)
+                print("[x] 凭证问题, 重试无意义 —— 请核对 --token / --ident 后重跑", file=sys.stderr)
+                raise SystemExit(2)
             except Exception as e:      # 平台偶发 5xx/超时不该打断整轮 dump
                 if self.verbose:
                     print("[!] 拉记录失败, 重试: %s" % e, file=sys.stderr)
@@ -666,6 +677,9 @@ def do_check(prov, timeout=30.0, verbose=False, force_doh=False):
     while time.time() < deadline:
         try:
             names = prov.get_records()
+        except ProviderAuthError as e:
+            print("[x] %s" % e)
+            return 2
         except Exception as e:
             print("[x] 拉记录失败: %s" % e)
             return 2
