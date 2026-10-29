@@ -43,6 +43,7 @@ __all__ = ["main", "DnsExfil", "DBMS_MAP", "encode_payload", "build_provider"]
 import argparse
 import binascii
 import http.cookiejar
+import ipaddress
 import json
 import os
 import random
@@ -550,15 +551,31 @@ def build_provider(a):
     sys.exit("[x] 未知 provider: %s" % a.provider)
 
 
-# 代理软件(Clash/sing-box)的 fake-ip 默认段与内网段: 命中即说明查询没真正出网
-_FAKE_PREFIXES = ("198.18.", "198.19.", "127.", "0.0.0.0", "10.", "192.168.",
-                  "172.16.", "172.17.", "172.18.", "172.19.", "172.2", "172.30.", "172.31.",
-                  "::1", "fe80:", "2001:2:", "fc", "fd")
+# 代理软件(Clash / sing-box / mihomo)的 fake-ip 池与各种内网段:
+# 命中即说明这次解析是本地伪造的, 查询没真正到达权威 NS。
+_FAKE_NETS = tuple(ipaddress.ip_network(n) for n in (
+    "198.18.0.0/15",     # Clash 默认 fake-ip
+    "2001:2::/48",       # Clash IPv6 fake-ip
+    "28.0.0.0/8",        # 部分代理自定义池
+    "100.64.0.0/10",     # CGNAT / Tailscale
+    "169.254.0.0/16",
+    "0.0.0.0/8",
+    "127.0.0.0/8",
+    "::1/128",
+    "fe80::/10",
+    "fc00::/7",
+))
 
 
 def _looks_fake(ip):
-    """Clash/sing-box 的 fake-ip 段(198.18.0.0/15)或内网地址 —— 说明查询没真正出网。"""
-    return any(ip.startswith(p) for p in _FAKE_PREFIXES)
+    """本地解析结果是伪地址(代理 fake-ip / 内网)时返回 True。"""
+    try:
+        addr = ipaddress.ip_address(ip.split("%")[0])
+    except ValueError:
+        return True
+    if addr.is_private or addr.is_loopback or addr.is_link_local:
+        return True
+    return any(addr in net for net in _FAKE_NETS)
 
 
 def _resolve_doh(fqdn, timeout=12):
