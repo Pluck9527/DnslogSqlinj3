@@ -19,6 +19,7 @@ pip install . && dnslogsqlinj3 --help  # 或装成命令
 python3 dnslogsqlinj3.py --self-test
 
 # 2) 回调通道体检（领域名 → 探针解析 → 平台确认）
+#    看到 "[+] 平台已收到记录" 才算通过；前面的"解析成功"不作数
 python3 dnslogsqlinj3.py --token TOKEN --ident IDENT --check
 
 # 3) 探路：确认注入点闭合正确
@@ -39,13 +40,13 @@ python3 dnslogsqlinj3.py --token TOKEN --ident IDENT --dbms mysql \
 | DNS 布尔 | `--blind` | 7 | FILE 权限 + 出 DNS |
 | SLEEP 时间盲注 | `--technique time` | 7 × samples | 只要 SQL 能跑 |
 
-默认 provider 就是 `ceye`（`--token` + `--ident`）。ceye 的 DNS 入库偶尔延迟到 30~60 秒，脚本会自动重投一次并打印等待心跳，不用干等。
+默认 provider 就是 `ceye`（`--token` + `--ident`）。平台入库一般 1~2 秒，偶尔会延迟几十秒——脚本会打印等待心跳并自动重投一次，不用干等。
 
 ## 支持
 
 - **数据库**：`mysql` `mssql` `oracle` `postgres`
 - **平台**：`dnslog.cn` / `ceye`（`--token --ident`）/ `dnsloggo`（`--base --token`）/ `cmd`（自定义命令）
-- **参数**：`--prefix`（默认 `AND `）、`--encode auto|strict`、`--chunk`、`--http-timeout`、`--sleep-delay`、`--samples`
+- **参数**：`--prefix`（默认 `AND `）、`--encode auto|strict`、`--chunk`（30）、`--http-timeout`（3）、`--poll`（1）、`--threads`（1）、`--sleep-delay`、`--samples`
 
 ## 速度
 
